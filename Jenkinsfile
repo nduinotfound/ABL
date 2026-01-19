@@ -17,14 +17,18 @@ pipeline {
         stage('Build & Test') {
             steps {
                 script {
-                    // Gunakan konfigurasi Maven dari Global Tool Configuration (Manage Jenkins)
-                    // Pastikan di Global Tool Configuration, Maven diberi nama 'maven-3'
+                    def repos = [
+                        'buku': 'https://github.com/nduinotfound/ABL-Buku.git',
+                        'anggota': 'https://github.com/nduinotfound/ABL-Anggota.git',
+                        'peminjaman': 'https://github.com/nduinotfound/ABL-Peminjaman.git',
+                        'pengembalian': 'https://github.com/nduinotfound/ABL-Pengembalian.git'
+                    ]
+
                     withMaven(maven: 'maven-3') {
-                        def services = ['buku', 'anggota', 'peminjaman', 'pengembalian', 'rabbitmq']
-                        for (service in services) {
-                            echo "Building service: ${service}"
-                            dir(service) {
-                                // Menambahkan flags untuk mempercepat build
+                        repos.each { name, url ->
+                            dir(name) {
+                                // Tarik kode dari repo masing-masing service
+                                git url: url, branch: 'main' 
                                 sh 'mvn clean package -DskipTests'
                             }
                         }
