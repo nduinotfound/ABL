@@ -1,0 +1,230 @@
+version: '3.8'
+
+services:
+  # --- INFRASTRUKTUR DASAR ---
+  server-eureka:
+    image: steeltoeoss/eureka-server
+    container_name: server-eureka
+    ports:
+      - "8761:8761"
+    environment:
+      JAVA_OPTS: "-Xmx256m -Xss512k"
+    networks:
+      - microservices-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: password
+    networks:
+      - microservices-network
+
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    privileged: true
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - microservices-network
+
+  # --- LOGGING (ELK STACK) ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    networks:
+      - microservices-network
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: logstash
+    volumes:
+      - ./elk-stack/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    ports:
+      - "5000:5000"
+    depends_on:
+      - elasticsearch
+    networks:
+      - microservices-network
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - microservices-network
+
+  # --- MONITORING ---
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - microservices-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - microservices-network
+
+  # --- SERVICE PERPUSTAKAAN ---
+  buku-service:
+    build: ./buku
+    image: library-buku:latest
+    container_name: buku-service
+    ports:
+      - "8001:8001"
+    environment:
+      - SERVER_PORT=8001
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+    networks:
+      - microservices-network
+
+  anggota-service:
+    build: ./anggota
+    image: library-anggota:latest
+    container_name: anggota-service
+    ports:
+      - "8002:8002"
+    environment:
+      - SERVER_PORT=8002
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+    networks:
+      - microservices-network
+
+  peminjaman-service:
+    build: ./peminjaman
+    image: library-peminjaman:latest
+    container_name: peminjaman-service
+    ports:
+      - "8003:8003"
+    environment:
+      - SERVER_PORT=8003
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+      - SPRING_RABBITMQ_HOST=rabbitmq
+    networks:
+      - microservices-network
+
+  pengembalian-service:
+    build: ./pengembalian
+    image: library-pengembalian:latest
+    container_name: pengembalian-service
+    ports:
+      - "8004:8004"
+    environment:
+      - SERVER_PORT=8004
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+    networks:
+      - microservices-network
+
+  notifikasi-service:
+    build: ./rabbitmq
+    image: library-rabbitmq:latest
+    container_name: notifikasi-service
+    ports:
+      - "8085:8085"
+    environment:
+      - SERVER_PORT=8085
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+      - SPRING_RABBITMQ_HOST=rabbitmq
+    networks:
+      - microservices-network
+
+  # --- SERVICE PRODUK & ORDER ---
+  product-service:
+    build: ./product
+    container_name: product-service
+    ports:
+      - "8081:8081"
+    environment:
+      - SERVER_PORT=8081
+      - SPRING_PROFILES_ACTIVE=docker
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+      - SPRING_RABBITMQ_HOST=rabbitmq
+    volumes:
+      - produk_data:/data
+    networks:
+      - microservices-network
+
+  pelanggan-service:
+    build: ./pelanggan
+    container_name: pelanggan-service
+    ports:
+      - "8082:8082"
+    environment:
+      - SERVER_PORT=8082
+      - SPRING_PROFILES_ACTIVE=docker
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+    volumes:
+      - pelanggan_data:/data
+    networks:
+      - microservices-network
+
+  order-service:
+    build: ./order
+    container_name: order-service
+    ports:
+      - "8083:8083"
+    environment:
+      - SERVER_PORT=8083
+      - SPRING_PROFILES_ACTIVE=docker
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+      - PRODUK_SERVICE_URL=http://product-service:8081
+      - PELANGGAN_SERVICE_URL=http://pelanggan-service:8082
+    volumes:
+      - order_data:/data
+    networks:
+      - microservices-network
+
+  api-gateaway:
+    build: ./api-gateaway
+    container_name: api-gateaway
+    ports:
+      - "9000:9000"
+    environment:
+      - SERVER_PORT=9000
+      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://server-eureka:8761/eureka/
+    networks:
+      - microservices-network
+
+volumes:
+  produk_data:
+  pelanggan_data:
+  order_data:
+  jenkins_home:
+
+networks:
+  microservices-network:
+    name: arsitektur-berbasis-layanan_microservices-network
+    driver: bridge
